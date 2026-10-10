@@ -1,0 +1,66 @@
+x-app-env: &app-env
+  MYSQL_DSN: calendar:calendar@tcp(mysql:3306)/calendar
+  SQS_QUEUE_NAME: calendar-entries
+  AWS_ENDPOINT_URL: http://localstack:4566
+  AWS_REGION: eu-central-1
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: calendar
+      MYSQL_USER: calendar
+      MYSQL_PASSWORD: calendar
+      MYSQL_ROOT_PASSWORD: root
+    ports: ["3306:3306"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ucalendar", "-pcalendar"]
+      interval: 3s
+      retries: 30
+
+  localstack:
+    # 2026.03+ images need LOCALSTACK_AUTH_TOKEN; 4.14 predates that. Override both via .env if needed.
+    image: localstack/localstack:${LOCALSTACK_TAG:-4.14}
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: eu-central-1
+      LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:-}
+    ports: ["4566:4566"]
+    volumes:
+      - ./deploy/localstack/init-sqs.sh:/etc/localstack/init/ready.d/init-sqs.sh:ro
+    healthcheck:
+      test: ["CMD", "awslocal", "sqs", "get-queue-url", "--queue-name", "calendar-entries"]
+      interval: 3s
+      retries: 30
+
+  # Application services: docker compose --profile app up --build
+  migrate:
+    profiles: [app]
+    build: .
+    entrypoint: ["/app/migrate"]
+    environment: *app-env
+    depends_on:
+      mysql: { condition: service_healthy }
+
+  api:
+    profiles: [app]
+    build: .
+    entrypoint: ["/app/api"]
+    environment:
+      <<: *app-env
+      PUBLISH_INTERVAL: ${PUBLISH_INTERVAL:-5m}
+      PUBLISH_ONCE: ${PUBLISH_ONCE:-false}
+    ports: ["8080:8080"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      localstack: { condition: service_healthy }
+
+  consumer:
+    profiles: [app]
+    build: .
+    entrypoint: ["/app/consumer"]
+    environment: *app-env
+    depends_on:
+      localstack: { condition: service_healthy }

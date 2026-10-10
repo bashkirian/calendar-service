@@ -1,0 +1,9 @@
+version: "2"
+sql:
+  - engine: mysql
+    schema: internal/mysql/migrations
+    queries: internal/mysql/queries.sql
+    gen:
+      go:
+        package: sqlcgen
+        out: internal/mysql/sqlcgen
